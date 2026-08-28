@@ -1,41 +1,105 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hide & Seek Tracker</title>
+  <title>Escondite Tracker</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; text-align: center; background: #111; color: #fff; }
-    button { padding: 12px 24px; font-size: 16px; border-radius: 8px; border: none; cursor: pointer; }
-    .status { margin-top: 20px; font-size: 14px; color: #aaa; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 24px;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-sizing: border-box;
+      min-height: 100vh;
+    }
+    .card {
+      width: 100%;
+      max-width: 400px;
+      background: #1e293b;
+      padding: 24px;
+      border-radius: 16px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+      text-align: center;
+    }
+    h2 { margin-top: 0; color: #38bdf8; font-size: 24px; }
+    input, select, button {
+      width: 100%;
+      padding: 14px;
+      margin-bottom: 14px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #fff;
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+    button {
+      background: #10b981;
+      border: none;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 6px;
+      transition: background 0.2s;
+    }
+    button:disabled { background: #475569; cursor: not-allowed; }
+    .status {
+      margin-top: 16px;
+      font-size: 14px;
+      color: #94a3b8;
+      line-height: 1.6;
+      white-space: pre-line;
+    }
   </style>
+
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 </head>
 <body>
-  <h2>Village Hide & Seek</h2>
-  <input id="name" placeholder="Your Name" style="padding: 10px; width: 80%; margin-bottom: 10px;"><br>
-  <select id="team" style="padding: 10px; width: 85%; margin-bottom: 15px;">
-    <option value="A">Team A (Hiders)</option>
-    <option value="B">Team B (Seekers)</option>
-  </select><br>
-  <button id="startBtn" onclick="startTracking()" style="background: #28a745; color: white;">Start Tracking</button>
-  <div class="status" id="status">Status: Idle</div>
+  <div class="card">
+    <h2>📡 Escondite Tracker</h2>
+    <input id="playerName" placeholder="Tu Nombre">
+    <select id="team">
+      <option value="A">Equipo A (Se esconden)</option>
+      <option value="B">Equipo B (Buscan)</option>
+    </select>
+    <button id="startBtn" onclick="startTracking()">Comenzar Transmisión</button>
+    <div class="status" id="status">Introduce tu nombre y pulsa Comenzar.</div>
+  </div>
 
   <script>
-    let watchId = null;
+    const firebaseConfig = {
+      apiKey: "AIzaSyDHz7xkbRDQyCA6Y3bb19g0R2EzK919t7s",
+      authDomain: "escondite-9f8b6.firebaseapp.com",
+      databaseURL: "https://escondite-9f8b6-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "escondite-9f8b6",
+      storageBucket: "escondite-9f8b6.firebasestorage.app",
+      messagingSenderId: "630083248771",
+      appId: "1:630083248771:web:50688687698c48947631b6"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
 
     async function startTracking() {
-      const name = document.getElementById('name').value.trim();
+      const name = document.getElementById('playerName').value.trim();
       const team = document.getElementById('team').value;
-      if (!name) return alert('Enter your name');
+      if (!name) return alert('Por favor, introduce tu nombre');
 
-      // Request screen wake lock so phone doesn't sleep while active
       if ('wakeLock' in navigator) {
         try { await navigator.wakeLock.request('screen'); } catch(e) {}
       }
 
       document.getElementById('startBtn').disabled = true;
-      document.getElementById('status').innerText = 'Transmitting GPS...';
+      document.getElementById('playerName').disabled = true;
+      document.getElementById('team').disabled = true;
+      document.getElementById('status').innerText = '⏳ Obteniendo señal GPS...';
 
-      watchId = navigator.geolocation.watchPosition(
+      navigator.geolocation.watchPosition(
         (pos) => {
           const payload = {
             name,
@@ -45,18 +109,16 @@
             accuracy: pos.coords.accuracy,
             updatedAt: Date.now()
           };
-          
-          // Send to your backend
-          fetch('/api/location', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
+
+          const safeKey = name.replace(/[.#$[\]]/g, "_");
+          db.ref(`players/${safeKey}`).set(payload);
 
           document.getElementById('status').innerText = 
-            `Last ping: ${new Date().toLocaleTimeString()} (±${Math.round(pos.coords.accuracy)}m)`;
+            `🟢 Transmitiendo señal GPS\nPrecisión: ±${Math.round(pos.coords.accuracy)}m\nÚltimo ping: ${new Date().toLocaleTimeString()}`;
         },
-        (err) => { document.getElementById('status').innerText = `GPS Error: ${err.message}`; },
+        (err) => {
+          document.getElementById('status').innerText = `⚠️ Error GPS: ${err.message}\nAsegúrate de dar permisos de ubicación.`;
+        },
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
       );
     }
