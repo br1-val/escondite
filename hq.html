@@ -118,7 +118,7 @@
     .session-info {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
 
     .badge {
@@ -140,6 +140,11 @@
       font-weight: 600;
     }
 
+    .admin-controls {
+      display: none;
+      gap: 8px;
+    }
+
     .reset-btn {
       background: #f59e0b;
       color: #111;
@@ -149,7 +154,17 @@
       cursor: pointer;
       font-size: 13px;
       font-weight: bold;
-      display: none;
+    }
+
+    .clear-players-btn {
+      background: #b91c1c;
+      color: white;
+      border: none;
+      padding: 7px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: bold;
     }
 
     #map { flex: 1; }
@@ -188,7 +203,11 @@
     <div class="session-info">
       <span id="activeTeamBadge" class="badge">Objetivo: --</span>
       <button class="logout-btn" onclick="handleLogout('Manual')">🔒 Salir</button>
-      <button id="resetCooldownsBtn" class="reset-btn" onclick="resetAllCooldowns()">🔄 Reset Cooldowns</button>
+      
+      <div id="adminActions" class="admin-controls">
+        <button class="reset-btn" onclick="resetAllCooldowns()">🔄 Reset Tiempos</button>
+        <button class="clear-players-btn" onclick="clearAllPlayers()">🗑️ Borrar Jugadores</button>
+      </div>
     </div>
     <div class="timer" id="timerDisplay">RADAR ACTIVO: 30s</div>
   </div>
@@ -227,12 +246,12 @@
     const COOLDOWN_MS = 10 * 60 * 1000; // 10 minutos
     const REVEAL_MS = 30 * 1000;         // 30 segundos
 
-    // Escuchar cooldowns en tiempo real
+    // Sincronización de Cooldowns
     db.ref('cooldowns').on('value', (snapshot) => {
       cooldowns = snapshot.val() || { A: 0, B: 0 };
     });
 
-    // Escuchar GPS de los jugadores
+    // Sincronización de Jugadores
     db.ref('players').on('value', (snapshot) => {
       allPlayers = snapshot.val() || {};
       if (currentTargetTeam) {
@@ -240,26 +259,25 @@
       }
     });
 
-    // Permitir pulsar Enter en el input
+    // Enter para validar PIN
     document.getElementById('pinInput').addEventListener('keypress', function(e) {
       if (e.key === 'Enter') handleLogin();
     });
 
     function handleLogin() {
       const pin = document.getElementById('pinInput').value.trim();
-      const errEl = document.getElementById('loginError');
       const now = Date.now();
 
-      // 1. ADMIN (PIN: 0000)
-      if (pin === '0705') {
+      // ADMIN: 0000
+      if (pin === '0000') {
         currentSessionRole = 'ADMIN';
         currentTargetTeam = 'ALL';
         loginSuccess('MODO ADMIN (Viendo todos)');
-        document.getElementById('resetCooldownsBtn').style.display = 'block';
+        document.getElementById('adminActions').style.display = 'flex';
         return;
       }
 
-      // 2. EQUIPO A (PIN: 1111)
+      // EQUIPO A: 1111
       if (pin === '1111') {
         const timePassed = now - (cooldowns.A || 0);
         if (timePassed < COOLDOWN_MS) {
@@ -277,7 +295,7 @@
         return;
       }
 
-      // 3. EQUIPO B (PIN: 9999)
+      // EQUIPO B: 9999
       if (pin === '9999') {
         const timePassed = now - (cooldowns.B || 0);
         if (timePassed < COOLDOWN_MS) {
@@ -295,7 +313,6 @@
         return;
       }
 
-      // PIN no reconocido
       showError('❌ PIN incorrecto');
     }
 
@@ -319,7 +336,7 @@
       currentSessionRole = null;
       currentTargetTeam = null;
       clearMarkers();
-      document.getElementById('resetCooldownsBtn').style.display = 'none';
+      document.getElementById('adminActions').style.display = 'none';
       document.getElementById('authOverlay').style.display = 'flex';
       document.getElementById('activeTeamBadge').innerText = 'Objetivo: --';
       document.getElementById('pinInput').focus();
@@ -329,9 +346,17 @@
       }
     }
 
+    // Funciones del Admin
     function resetAllCooldowns() {
       if (confirm('¿Resetear los temporizadores de ambos equipos a 0?')) {
         db.ref('cooldowns').set({ A: 0, B: 0 });
+      }
+    }
+
+    function clearAllPlayers() {
+      if (confirm('⚠️ ¿Seguro que quieres borrar a TODOS los jugadores de la partida?')) {
+        db.ref('players').remove();
+        clearMarkers();
       }
     }
 
@@ -347,8 +372,8 @@
       const now = Date.now();
 
       Object.values(allPlayers).forEach(p => {
-        // Filtrar por equipo objetivo o mostrar todos si es admin (últimos 15 min de actividad)
         const isTarget = currentTargetTeam === 'ALL' || p.team === currentTargetTeam;
+        // Pings de los últimos 15 min
         if (isTarget && (now - p.updatedAt) < 15 * 60 * 1000) {
           const color = p.team === 'A' ? '#3b82f6' : '#f97316';
 
@@ -379,11 +404,11 @@
       });
     }
 
-    // Bucle para actualizar contadores y expulsión
+    // Actualizador de cooldowns y ventana activa
     function updateTimers() {
       const now = Date.now();
 
-      // Actualizar los 2 contadores del menú de bloqueo
+      // Contadores del menú de inicio
       ['A', 'B'].forEach(team => {
         const lastUsed = cooldowns[team] || 0;
         const timePassed = now - lastUsed;
@@ -401,10 +426,10 @@
         }
       });
 
-      // Control de sesión activa
+      // Control de tiempo activo
       const timerEl = document.getElementById('timerDisplay');
       if (currentSessionRole === 'ADMIN') {
-        timerEl.innerText = '🛡️ VISTA ADMIN (SIN LÍMITE)';
+        timerEl.innerText = '🛡️ MODO ADMIN (SIN LÍMITE)';
         timerEl.className = 'timer admin-timer';
       } else if (currentSessionRole === 'A' || currentSessionRole === 'B') {
         const sessionStart = cooldowns[currentSessionRole] || 0;
