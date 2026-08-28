@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>HQ Command Radar</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { margin: 0; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
+    #header { background: #1a1a1a; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
+    #map { flex: 1; }
+    .timer { font-size: 24px; font-weight: bold; color: #ffc107; }
+    .ping-active { color: #dc3545 !important; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <div>
+      <label>Viewing Target: </label>
+      <select id="targetTeam" onchange="clearMarkers()">
+        <option value="B">Opponent: Team B</option>
+        <option value="A">Opponent: Team A</option>
+      </select>
+    </div>
+    <div class="timer" id="timerDisplay">Next Radar: 10:00</div>
+  </div>
+  <div id="map"></div>
+
+  <script>
+    // Set initial map center to your village coordinates
+    const map = L.map('map').setView([42.3439, -3.6969], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+    let activeMarkers = [];
+    const CYCLE_MS = 10 * 60 * 1000; // 10 minutes
+    const REVEAL_MS = 30 * 1000;      // 30 seconds
+
+    function clearMarkers() {
+      activeMarkers.forEach(m => map.removeLayer(m));
+      activeMarkers = [];
+    }
+
+    async function fetchOpponentPositions() {
+      const targetTeam = document.getElementById('targetTeam').value;
+      const res = await fetch(`/api/locations?team=${targetTeam}`);
+      const players = await res.json();
+
+      clearMarkers();
+      players.forEach(p => {
+        const marker = L.circleMarker([p.lat, p.lng], {
+          radius: 10,
+          fillColor: targetTeam === 'A' ? '#007bff' : '#ff5722',
+          color: '#fff',
+          weight: 2,
+          fillOpacity: 0.9
+        }).bindPopup(`<b>${p.name}</b><br>Accuracy: ±${Math.round(p.accuracy)}m`).addTo(map);
+        
+        activeMarkers.push(marker);
+      });
+    }
+
+    function updateRadarLoop() {
+      const now = Date.now();
+      const timeInCycle = now % CYCLE_MS;
+      const timerEl = document.getElementById('timerDisplay');
+
+      if (timeInCycle < REVEAL_MS) {
+        // Active 30s window
+        const remaining = Math.ceil((REVEAL_MS - timeInCycle) / 1000);
+        timerEl.innerText = `RADAR ACTIVE: ${remaining}s`;
+        timerEl.className = 'timer ping-active';
+        fetchOpponentPositions();
+      } else {
+        // Waiting window
+        clearMarkers();
+        const untilNext = Math.ceil((CYCLE_MS - timeInCycle) / 1000);
+        const mins = Math.floor(untilNext / 60);
+        const secs = String(untilNext % 60).padStart(2, '0');
+        timerEl.innerText = `Next Radar in: ${mins}:${secs}`;
+        timerEl.className = 'timer';
+      }
+    }
+
+    setInterval(updateRadarLoop, 1000);
+  </script>
+</body>
+</html>

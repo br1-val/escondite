@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hide & Seek Tracker</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; text-align: center; background: #111; color: #fff; }
+    button { padding: 12px 24px; font-size: 16px; border-radius: 8px; border: none; cursor: pointer; }
+    .status { margin-top: 20px; font-size: 14px; color: #aaa; }
+  </style>
+</head>
+<body>
+  <h2>Village Hide & Seek</h2>
+  <input id="name" placeholder="Your Name" style="padding: 10px; width: 80%; margin-bottom: 10px;"><br>
+  <select id="team" style="padding: 10px; width: 85%; margin-bottom: 15px;">
+    <option value="A">Team A (Hiders)</option>
+    <option value="B">Team B (Seekers)</option>
+  </select><br>
+  <button id="startBtn" onclick="startTracking()" style="background: #28a745; color: white;">Start Tracking</button>
+  <div class="status" id="status">Status: Idle</div>
+
+  <script>
+    let watchId = null;
+
+    async function startTracking() {
+      const name = document.getElementById('name').value.trim();
+      const team = document.getElementById('team').value;
+      if (!name) return alert('Enter your name');
+
+      // Request screen wake lock so phone doesn't sleep while active
+      if ('wakeLock' in navigator) {
+        try { await navigator.wakeLock.request('screen'); } catch(e) {}
+      }
+
+      document.getElementById('startBtn').disabled = true;
+      document.getElementById('status').innerText = 'Transmitting GPS...';
+
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const payload = {
+            name,
+            team,
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            updatedAt: Date.now()
+          };
+          
+          // Send to your backend
+          fetch('/api/location', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          document.getElementById('status').innerText = 
+            `Last ping: ${new Date().toLocaleTimeString()} (±${Math.round(pos.coords.accuracy)}m)`;
+        },
+        (err) => { document.getElementById('status').innerText = `GPS Error: ${err.message}`; },
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      );
+    }
+  </script>
+</body>
+</html>
