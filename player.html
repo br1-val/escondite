@@ -85,6 +85,11 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
+    let watchId = null;
+    let pingInterval = null;
+    let latestCoords = null;
+    let myPlayerRef = null;
+
     async function startTracking() {
       const name = document.getElementById('playerName').value.trim();
       const team = document.getElementById('team').value;
@@ -99,28 +104,66 @@
       document.getElementById('team').disabled = true;
       document.getElementById('status').innerText = '⏳ Obteniendo señal GPS...';
 
-      navigator.geolocation.watchPosition(
+      const safeKey = name.replace(/[.#$[\]]/g, "_");
+      myPlayerRef = db.ref(`players/${safeKey}`);
+
+      // Escuchar si el Admin resetea/borra la partida
+      myPlayerRef.on('value', (snapshot) => {
+        // Si estábamos transmitiendo pero el admin borró el nodo
+        if (latestCoords && !snapshot.exists()) {
+          stopTracking('Partida reiniciada por el Administrador.');
+        }
+      });
+
+      // 1. Obtener última posición en tiempo real
+      watchId = navigator.geolocation.watchPosition(
         (pos) => {
+          latestCoords = {
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            accuracy: pos.coords.accuracy
+          };
+        },
+        (err) => {
+          document.getElementById('status').innerText = `⚠️ Error GPS: ${err.message}\nAsegúrate de tener permisos activados.`;
+        },
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      );
+
+      // 2. Enviar ping a Firebase estrictamente cada 10 segundos
+      pingInterval = setInterval(() => {
+        if (latestCoords && myPlayerRef) {
           const payload = {
             name,
             team,
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            accuracy: pos.coords.accuracy,
+            lat: latestCoords.lat,
+            lng: latestCoords.lng,
+            accuracy: latestCoords.accuracy,
             updatedAt: Date.now()
           };
 
-          const safeKey = name.replace(/[.#$[\]]/g, "_");
-          db.ref(`players/${safeKey}`).set(payload);
+          myPlayerRef.set(payload);
 
           document.getElementById('status').innerText = 
-            `🟢 Transmitiendo señal GPS\nPrecisión: ±${Math.round(pos.coords.accuracy)}m\nÚltimo ping: ${new Date().toLocaleTimeString()}`;
-        },
-        (err) => {
-          document.getElementById('status').innerText = `⚠️ Error GPS: ${err.message}\nAsegúrate de dar permisos de ubicación.`;
-        },
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
-      );
+            `🟢 Transmitiendo cada 10s\nMargen error: ±${Math.round(latestCoords.accuracy)}m\nÚltimo ping: ${new Date().toLocaleTimeString()}`;
+        }
+      }, 10000);
+    }
+
+    function stopTracking(msg) {
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      if (pingInterval !== null) clearInterval(pingInterval);
+      if (myPlayerRef) myPlayerRef.off();
+
+      watchId = null;
+      pingInterval = null;
+      latestCoords = null;
+      myPlayerRef = null;
+
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('playerName').disabled = false;
+      document.getElementById('team').disabled = false;
+      document.getElementById('status').innerText = `ℹ️ ${msg}\nPuedes volver a iniciar cuando quieras.`;
     }
   </script>
 </body>
