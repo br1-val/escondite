@@ -1,61 +1,129 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
-  <title>HQ Command Radar</title>
+  <meta charset="UTF-8">
+  <title>HQ Radar - Avellanosa de Muñó</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
   <style>
-    body { margin: 0; display: flex; flex-direction: column; height: 100vh; font-family: sans-serif; }
-    #header { background: #1a1a1a; color: white; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; }
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #0f172a;
+    }
+    #header {
+      background: #1e293b;
+      color: white;
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 2px solid #334155;
+      z-index: 1000;
+    }
     #map { flex: 1; }
-    .timer { font-size: 24px; font-weight: bold; color: #ffc107; }
-    .ping-active { color: #dc3545 !important; animation: pulse 1s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .timer { font-size: 22px; font-weight: bold; color: #38bdf8; }
+    .ping-active { color: #ef4444 !important; animation: blink 1s infinite; }
+    select {
+      background: #0f172a;
+      color: #fff;
+      border: 1px solid #475569;
+      padding: 8px 14px;
+      font-size: 15px;
+      border-radius: 6px;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   </style>
 </head>
 <body>
   <div id="header">
     <div>
-      <label>Viewing Target: </label>
-      <select id="targetTeam" onchange="clearMarkers()">
-        <option value="B">Opponent: Team B</option>
-        <option value="A">Opponent: Team A</option>
+      <label style="font-weight: bold; margin-right: 8px;">Equipo a espiar: </label>
+      <select id="targetTeam" onchange="drawMarkers()">
+        <option value="A">Equipo A (Se esconden)</option>
+        <option value="B">Equipo B (Buscan)</option>
       </select>
     </div>
-    <div class="timer" id="timerDisplay">Next Radar: 10:00</div>
+    <div class="timer" id="timerDisplay">Calculando radar...</div>
   </div>
   <div id="map"></div>
 
   <script>
-    // Set initial map center to your village coordinates
-    const map = L.map('map').setView([42.3439, -3.6969], 15);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+    const firebaseConfig = {
+      apiKey: "AIzaSyDHz7xkbRDQyCA6Y3bb19g0R2EzK919t7s",
+      authDomain: "escondite-9f8b6.firebaseapp.com",
+      databaseURL: "https://escondite-9f8b6-default-rtdb.europe-west1.firebasedatabase.app",
+      projectId: "escondite-9f8b6",
+      storageBucket: "escondite-9f8b6.firebasestorage.app",
+      messagingSenderId: "630083248771",
+      appId: "1:630083248771:web:50688687698c48947631b6"
+    };
 
-    let activeMarkers = [];
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // Centered directly on Avellanosa de Muñó
+    const map = L.map('map').setView([42.0073, -3.9248], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    let allPlayers = {};
+    let activeLayers = [];
     const CYCLE_MS = 10 * 60 * 1000; // 10 minutes
     const REVEAL_MS = 30 * 1000;      // 30 seconds
 
+    db.ref('players').on('value', (snapshot) => {
+      allPlayers = snapshot.val() || {};
+      const timeInCycle = Date.now() % CYCLE_MS;
+      if (timeInCycle < REVEAL_MS) {
+        drawMarkers();
+      }
+    });
+
     function clearMarkers() {
-      activeMarkers.forEach(m => map.removeLayer(m));
-      activeMarkers = [];
+      activeLayers.forEach(layer => map.removeLayer(layer));
+      activeLayers = [];
     }
 
-    async function fetchOpponentPositions() {
-      const targetTeam = document.getElementById('targetTeam').value;
-      const res = await fetch(`/api/locations?team=${targetTeam}`);
-      const players = await res.json();
-
+    function drawMarkers() {
       clearMarkers();
-      players.forEach(p => {
-        const marker = L.circleMarker([p.lat, p.lng], {
-          radius: 10,
-          fillColor: targetTeam === 'A' ? '#007bff' : '#ff5722',
-          color: '#fff',
-          weight: 2,
-          fillOpacity: 0.9
-        }).bindPopup(`<b>${p.name}</b><br>Accuracy: ±${Math.round(p.accuracy)}m`).addTo(map);
-        
-        activeMarkers.push(marker);
+      const targetTeam = document.getElementById('targetTeam').value;
+      const now = Date.now();
+
+      Object.values(allPlayers).forEach(p => {
+        // Render players updated in the last 15 minutes
+        if (p.team === targetTeam && (now - p.updatedAt) < 15 * 60 * 1000) {
+          const color = targetTeam === 'A' ? '#3b82f6' : '#f97316';
+
+          // Accuracy radius circle
+          const radiusCircle = L.circle([p.lat, p.lng], {
+            radius: p.accuracy || 15,
+            color: color,
+            weight: 1,
+            fillColor: color,
+            fillOpacity: 0.15
+          }).addTo(map);
+
+          // Marker center point
+          const marker = L.circleMarker([p.lat, p.lng], {
+            radius: 8,
+            fillColor: color,
+            color: '#ffffff',
+            weight: 2,
+            fillOpacity: 0.95
+          }).bindPopup(`<b>${p.name}</b><br>Margen error: ±${Math.round(p.accuracy)}m<br>Hora: ${new Date(p.updatedAt).toLocaleTimeString()}`).addTo(map);
+
+          activeLayers.push(radiusCircle, marker);
+        }
       });
     }
 
@@ -65,18 +133,16 @@
       const timerEl = document.getElementById('timerDisplay');
 
       if (timeInCycle < REVEAL_MS) {
-        // Active 30s window
         const remaining = Math.ceil((REVEAL_MS - timeInCycle) / 1000);
-        timerEl.innerText = `RADAR ACTIVE: ${remaining}s`;
+        timerEl.innerText = `🚨 RADAR ACTIVO: ${remaining}s`;
         timerEl.className = 'timer ping-active';
-        fetchOpponentPositions();
+        if (activeLayers.length === 0) drawMarkers();
       } else {
-        // Waiting window
         clearMarkers();
         const untilNext = Math.ceil((CYCLE_MS - timeInCycle) / 1000);
         const mins = Math.floor(untilNext / 60);
         const secs = String(untilNext % 60).padStart(2, '0');
-        timerEl.innerText = `Next Radar in: ${mins}:${secs}`;
+        timerEl.innerText = `Próximo radar en: ${mins}:${secs}`;
         timerEl.className = 'timer';
       }
     }
