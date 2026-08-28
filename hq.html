@@ -118,7 +118,8 @@
     .session-info {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     .badge {
@@ -143,34 +144,34 @@
     .admin-controls {
       display: none;
       gap: 8px;
+      align-items: center;
     }
 
-    .reset-btn {
-      background: #f59e0b;
-      color: #111;
+    .btn-action {
       border: none;
-      padding: 7px 12px;
+      padding: 7px 11px;
       border-radius: 6px;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: bold;
     }
 
-    .clear-players-btn {
-      background: #b91c1c;
-      color: white;
-      border: none;
-      padding: 7px 12px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: bold;
-    }
+    .reset-btn { background: #f59e0b; color: #111; }
+    .endgame-btn { background: #dc2626; color: white; }
+    .resume-btn { background: #10b981; color: white; display: none; }
+    .clear-players-btn { background: #64748b; color: white; }
 
     #map { flex: 1; }
     .timer { font-size: 20px; font-weight: bold; color: #ef4444; animation: blink 1s infinite; }
     .admin-timer { color: #10b981 !important; animation: none !important; }
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .leaflet-control-layers {
+      background: #1e293b !important;
+      color: #f8fafc !important;
+      border: 1px solid #475569 !important;
+      border-radius: 8px !important;
+    }
   </style>
 </head>
 <body>
@@ -205,8 +206,10 @@
       <button class="logout-btn" onclick="handleLogout('Manual')">🔒 Salir</button>
       
       <div id="adminActions" class="admin-controls">
-        <button class="reset-btn" onclick="resetAllCooldowns()">🔄 Reset Tiempos</button>
-        <button class="clear-players-btn" onclick="clearAllPlayers()">🗑️ Borrar Jugadores</button>
+        <button class="btn-action reset-btn" onclick="resetAllCooldowns()">🔄 Reset Tiempos</button>
+        <button id="endGameBtn" class="btn-action endgame-btn" onclick="promptEndGame()">🏁 Terminar Partida</button>
+        <button id="resumeGameBtn" class="btn-action resume-btn" onclick="resumeGame()">▶️ Nueva Ronda</button>
+        <button class="btn-action clear-players-btn" onclick="clearAllPlayers()">🗑️ Borrar Jugadores</button>
       </div>
     </div>
     <div class="timer" id="timerDisplay">RADAR ACTIVO: 30s</div>
@@ -231,11 +234,33 @@
     const VILLAGE_LAT = 41.983498;
     const VILLAGE_LNG = -3.824581;
 
-    const map = L.map('map').setView([VILLAGE_LAT, VILLAGE_LNG], 16);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // Capas Satélite Híbrido + Callejero
+    const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
       maxZoom: 19,
-      attribution: '© OpenStreetMap'
-    }).addTo(map);
+      attribution: 'Esri World Imagery'
+    });
+
+    const labelsLayer = L.tileLayer('https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19
+    });
+
+    const hybridGroup = L.layerGroup([satLayer, labelsLayer]);
+
+    const streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: 'OpenStreetMap'
+    });
+
+    const map = L.map('map', {
+      center: [VILLAGE_LAT, VILLAGE_LNG],
+      zoom: 16,
+      layers: [hybridGroup]
+    });
+
+    L.control.layers({
+      "🛰️ Satélite Híbrido": hybridGroup,
+      "🗺️ Callejero": streetLayer
+    }, null, { position: 'topright' }).addTo(map);
 
     let currentSessionRole = null; // 'A', 'B', o 'ADMIN'
     let currentTargetTeam = null;  // 'A', 'B', o 'ALL'
@@ -259,7 +284,21 @@
       }
     });
 
-    // Enter para validar PIN
+    // Sincronización de Estado de Partida
+    db.ref('gameState').on('value', (snapshot) => {
+      const state = snapshot.val();
+      const endBtn = document.getElementById('endGameBtn');
+      const resumeBtn = document.getElementById('resumeGameBtn');
+      if (state && state.status === 'ENDED') {
+        if (endBtn) endBtn.style.display = 'none';
+        if (resumeBtn) resumeBtn.style.display = 'inline-block';
+      } else {
+        if (endBtn) endBtn.style.display = 'inline-block';
+        if (resumeBtn) resumeBtn.style.display = 'none';
+      }
+    });
+
+    // Enter en input PIN
     document.getElementById('pinInput').addEventListener('keypress', function(e) {
       if (e.key === 'Enter') handleLogin();
     });
@@ -268,8 +307,8 @@
       const pin = document.getElementById('pinInput').value.trim();
       const now = Date.now();
 
-      // ADMIN: 0000
-      if (pin === '0000') {
+      // ADMIN PIN: 0007
+      if (pin === '0007') {
         currentSessionRole = 'ADMIN';
         currentTargetTeam = 'ALL';
         loginSuccess('MODO ADMIN (Viendo todos)');
@@ -346,7 +385,36 @@
       }
     }
 
-    // Funciones del Admin
+    // Funciones de Administrador
+    function promptEndGame() {
+      const choice = prompt('🏁 ¿Quién ha ganado la partida?\nEscribe:\nA = Equipo A\nB = Equipo B\nE = Empate');
+      if (!choice) return;
+
+      let winnerText = '';
+      if (choice.trim().toUpperCase() === 'A') winnerText = 'Equipo A';
+      else if (choice.trim().toUpperCase() === 'B') winnerText = 'Equipo B';
+      else if (choice.trim().toUpperCase() === 'E') winnerText = '¡Empate!';
+      else {
+        alert('Opción no válida');
+        return;
+      }
+
+      db.ref('gameState').set({
+        status: 'ENDED',
+        winner: winnerText,
+        endedAt: Date.now()
+      });
+    }
+
+    function resumeGame() {
+      if (confirm('¿Reanudar y empezar una nueva ronda? Silenciará las alarmas de los móviles.')) {
+        db.ref('gameState').set({
+          status: 'ACTIVE',
+          resumedAt: Date.now()
+        });
+      }
+    }
+
     function resetAllCooldowns() {
       if (confirm('¿Resetear los temporizadores de ambos equipos a 0?')) {
         db.ref('cooldowns').set({ A: 0, B: 0 });
@@ -373,24 +441,23 @@
 
       Object.values(allPlayers).forEach(p => {
         const isTarget = currentTargetTeam === 'ALL' || p.team === currentTargetTeam;
-        // Pings de los últimos 15 min
         if (isTarget && (now - p.updatedAt) < 15 * 60 * 1000) {
-          const color = p.team === 'A' ? '#3b82f6' : '#f97316';
+          const color = p.team === 'A' ? '#38bdf8' : '#fb923c';
 
           const radiusCircle = L.circle([p.lat, p.lng], {
             radius: p.accuracy || 15,
             color: color,
-            weight: 1,
+            weight: 2,
             fillColor: color,
-            fillOpacity: 0.15
+            fillOpacity: 0.25
           }).addTo(map);
 
           const marker = L.circleMarker([p.lat, p.lng], {
-            radius: 8,
+            radius: 9,
             fillColor: color,
             color: '#ffffff',
-            weight: 2,
-            fillOpacity: 0.95
+            weight: 3,
+            fillOpacity: 1
           }).bindPopup(`
             <div style="color: #111;">
               <b>${p.name}</b> (${p.team === 'A' ? 'Eq. A' : 'Eq. B'})<br>
@@ -404,11 +471,10 @@
       });
     }
 
-    // Actualizador de cooldowns y ventana activa
+    // Actualizador de temporizadores
     function updateTimers() {
       const now = Date.now();
 
-      // Contadores del menú de inicio
       ['A', 'B'].forEach(team => {
         const lastUsed = cooldowns[team] || 0;
         const timePassed = now - lastUsed;
@@ -426,7 +492,6 @@
         }
       });
 
-      // Control de tiempo activo
       const timerEl = document.getElementById('timerDisplay');
       if (currentSessionRole === 'ADMIN') {
         timerEl.innerText = '🛡️ MODO ADMIN (SIN LÍMITE)';
