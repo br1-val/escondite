@@ -54,7 +54,19 @@
       white-space: pre-line;
     }
 
-    /* Pantalla de Fin de Partida / Alarma */
+    .accuracy-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 13px;
+      margin-top: 8px;
+    }
+    .acc-great { background: #065f46; color: #34d399; }
+    .acc-medium { background: #854d0e; color: #fde047; }
+    .acc-bad { background: #991b1b; color: #fca5a5; }
+
+    /* Overlay de Fin de Partida */
     #gameOverOverlay {
       position: fixed;
       top: 0;
@@ -134,6 +146,7 @@
     </select>
     <button id="startBtn" onclick="startTracking()">Comenzar Transmisión</button>
     <div class="status" id="status">Introduce tu nombre y pulsa Comenzar.</div>
+    <div id="accuracyBadge" class="accuracy-badge" style="display:none;"></div>
   </div>
 
   <script>
@@ -152,12 +165,12 @@
 
     let watchId = null;
     let pingInterval = null;
-    let latestCoords = null;
+    let bestCoordsInWindow = null;
+    let lastSentCoords = null;
     let myPlayerRef = null;
     let audioCtx = null;
     let sirenInterval = null;
 
-    // Inicializar AudioContext en el primer toque de pantalla para evitar bloqueo del navegador
     function initAudio() {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -167,7 +180,6 @@
       }
     }
 
-    // Generador de sonido de sirena con Web Audio API
     function playSirenBeep() {
       try {
         initAudio();
@@ -190,20 +202,16 @@
         if ('vibrate' in navigator) {
           navigator.vibrate([200, 100, 200]);
         }
-      } catch (e) {
-        console.warn('Audio error:', e);
-      }
+      } catch (e) {}
     }
 
     function triggerAlarm(winner) {
       document.getElementById('winnerAnnouncement').innerText = `🏆 ¡GANADOR: ${winner.toUpperCase()}!`;
       document.getElementById('gameOverOverlay').style.display = 'flex';
 
-      // Parar transmisión GPS
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
       if (pingInterval !== null) clearInterval(pingInterval);
 
-      // Reproducir sirena continua cada 500ms
       playSirenBeep();
       if (!sirenInterval) {
         sirenInterval = setInterval(playSirenBeep, 500);
@@ -219,7 +227,7 @@
       stopTracking('Partida finalizada por el Administrador.');
     }
 
-    // Escuchar estado de la partida
+    // Escuchar estado global
     db.ref('gameState').on('value', (snapshot) => {
       const state = snapshot.val();
       if (state && state.status === 'ENDED') {
@@ -243,49 +251,76 @@
       document.getElementById('startBtn').disabled = true;
       document.getElementById('playerName').disabled = true;
       document.getElementById('team').disabled = true;
-      document.getElementById('status').innerText = '⏳ Obteniendo señal GPS...';
+      document.getElementById('status').innerText = '🛰️ Enganchando satélites GPS de alta precisión...';
 
       const safeKey = name.replace(/[.#$[\]]/g, "_");
       myPlayerRef = db.ref(`players/${safeKey}`);
 
-      // Escuchar si el admin borra los jugadores
       myPlayerRef.on('value', (snapshot) => {
-        if (latestCoords && !snapshot.exists()) {
+        if (lastSentCoords && !snapshot.exists()) {
           stopTracking('Partida reiniciada por el Administrador.');
         }
       });
 
-      // 1. Obtener última posición
+      // 1. Escucha continua en hardware con máxima resolución (sin caché)
       watchId = navigator.geolocation.watchPosition(
         (pos) => {
-          latestCoords = {
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            accuracy: pos.coords.accuracy
-          };
+          const acc = pos.coords.accuracy;
+          
+          // Actualizar semáforo de precisión en pantalla
+          const badge = document.getElementById('accuracyBadge');
+          badge.style.display = 'inline-block';
+          if (acc <= 10) {
+            badge.className = 'accuracy-badge acc-great';
+            badge.innerText = `🛰️ Precisión Excelente (±${Math.round(acc)}m)`;
+          } else if (acc <= 25) {
+            badge.className = 'accuracy-badge acc-medium';
+            badge.innerText = `📡 Precisión Normal (±${Math.round(acc)}m)`;
+          } else {
+            badge.className = 'accuracy-badge acc-bad';
+            badge.innerText = `⚠️ Buscando mejor señal (±${Math.round(acc)}m)`;
+          }
+
+          // Guardamos siempre la muestra con MENOR margen de error durante esta ventana
+          if (!bestCoordsInWindow || acc < bestCoordsInWindow.accuracy) {
+            bestCoordsInWindow = {
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+              accuracy: acc
+            };
+          }
         },
         (err) => {
-          document.getElementById('status').innerText = `⚠️ Error GPS: ${err.message}\nAsegúrate de tener permisos activados.`;
+          document.getElementById('status').innerText = `⚠️ Error GPS: ${err.message}\nActiva la Ubicación Precisa en ajustes del navegador.`;
         },
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+        { 
+          enableHighAccuracy: true, // Fuerza uso de antena GPS
+          maximumAge: 0,            // Cero caché, posición instantánea
+          timeout: 8000 
+        }
       );
 
-      // 2. Transmisión estricta cada 10 segundos
+      // 2. Transmisión a Firebase cada 10 segundos eligiendo la mejor muestra capturada
       pingInterval = setInterval(() => {
-        if (latestCoords && myPlayerRef) {
+        const coordsToSend = bestCoordsInWindow || lastSentCoords;
+
+        if (coordsToSend && myPlayerRef) {
           const payload = {
             name,
             team,
-            lat: latestCoords.lat,
-            lng: latestCoords.lng,
-            accuracy: latestCoords.accuracy,
+            lat: coordsToSend.lat,
+            lng: coordsToSend.lng,
+            accuracy: coordsToSend.accuracy,
             updatedAt: Date.now()
           };
 
           myPlayerRef.set(payload);
+          lastSentCoords = coordsToSend;
+          // Reiniciar para encontrar la mejor muestra en los siguientes 10 segundos
+          bestCoordsInWindow = null; 
 
           document.getElementById('status').innerText = 
-            `🟢 Transmitiendo cada 10s\nMargen error: ±${Math.round(latestCoords.accuracy)}m\nÚltimo ping: ${new Date().toLocaleTimeString()}`;
+            `🟢 Transmitiendo (ping cada 10s)\nMargen de error enviado: ±${Math.round(coordsToSend.accuracy)}m\nÚltimo envío: ${new Date().toLocaleTimeString()}`;
         }
       }, 10000);
     }
@@ -297,13 +332,15 @@
 
       watchId = null;
       pingInterval = null;
-      latestCoords = null;
+      bestCoordsInWindow = null;
+      lastSentCoords = null;
       myPlayerRef = null;
 
       document.getElementById('startBtn').disabled = false;
       document.getElementById('playerName').disabled = false;
       document.getElementById('team').disabled = false;
       document.getElementById('status').innerText = `ℹ️ ${msg}\nPuedes volver a iniciar cuando quieras.`;
+      document.getElementById('accuracyBadge').style.display = 'none';
     }
   </script>
 </body>
