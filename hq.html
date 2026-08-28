@@ -22,14 +22,14 @@
       color: #f8fafc;
     }
 
-    /* Modal de Bloqueo / Login */
+    /* Pantalla de Bloqueo / Login */
     #authOverlay {
       position: fixed;
       top: 0;
       left: 0;
       width: 100vw;
       height: 100vh;
-      background: rgba(15, 23, 42, 0.96);
+      background: rgba(15, 23, 42, 0.97);
       backdrop-filter: blur(10px);
       display: flex;
       justify-content: center;
@@ -43,16 +43,36 @@
       border-radius: 16px;
       border: 1px solid #334155;
       width: 90%;
-      max-width: 420px;
+      max-width: 440px;
       text-align: center;
       box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
     }
 
-    .auth-card h2 { margin-top: 0; color: #38bdf8; }
+    .auth-card h2 { margin-top: 0; color: #38bdf8; font-size: 22px; }
+
+    .team-status-box {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .status-pill {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 13px;
+    }
+
+    .status-pill b { display: block; margin-bottom: 4px; font-size: 14px; }
+    .ready { color: #10b981; }
+    .waiting { color: #f59e0b; }
+
     .auth-card select, .auth-card input {
       width: 100%;
       padding: 12px;
-      margin-bottom: 16px;
+      margin-bottom: 14px;
       border-radius: 8px;
       border: 1px solid #475569;
       background: #0f172a;
@@ -62,7 +82,7 @@
 
     .auth-card button {
       width: 100%;
-      padding: 12px;
+      padding: 14px;
       border-radius: 8px;
       border: none;
       background: #3b82f6;
@@ -74,17 +94,6 @@
     }
     .auth-card button:hover { background: #2563eb; }
 
-    .modal-timer {
-      background: #0f172a;
-      padding: 12px;
-      border-radius: 8px;
-      border: 1px solid #334155;
-      margin-bottom: 20px;
-      font-weight: bold;
-      font-size: 15px;
-      color: #94a3b8;
-    }
-
     .error-msg {
       color: #ef4444;
       font-size: 14px;
@@ -93,7 +102,7 @@
       display: none;
     }
 
-    /* Header del Radar */
+    /* Header del Radar Activo */
     #header {
       background: #1e293b;
       padding: 12px 24px;
@@ -130,43 +139,47 @@
     }
 
     #map { flex: 1; }
-    .timer { font-size: 20px; font-weight: bold; color: #38bdf8; }
-    .ping-active { color: #ef4444 !important; animation: blink 1s infinite; }
+    .timer { font-size: 20px; font-weight: bold; color: #ef4444; animation: blink 1s infinite; }
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   </style>
 </head>
 <body>
 
-  <!-- Modal de Login / Bloqueo -->
+  <!-- Modal de Selección de Equipo y PIN -->
   <div id="authOverlay">
     <div class="auth-card">
-      <h2>🛡️ HQ Radar Central</h2>
+      <h2>📡 Acceso Radar - Avellanosa</h2>
       
-      <div id="modalTimerDisplay" class="modal-timer">Sincronizando reloj...</div>
+      <div class="team-status-box">
+        <div class="status-pill" id="pillTeamA">
+          <b>Equipo A</b>
+          <span id="statusTextA" class="ready">Listo para usar</span>
+        </div>
+        <div class="status-pill" id="pillTeamB">
+          <b>Equipo B</b>
+          <span id="statusTextB" class="ready">Listo para usar</span>
+        </div>
+      </div>
 
-      <p style="color: #94a3b8; font-size: 14px; margin-bottom: 16px;">
-        Introduce tus credenciales para ver las posiciones enemigas durante la ventana de 30 segundos.
-      </p>
-      
       <select id="userTeamSelect">
         <option value="A">Capitán Equipo A (Ver al B)</option>
         <option value="B">Capitán Equipo B (Ver al A)</option>
       </select>
 
-      <input type="password" id="pinInput" placeholder="Introduce PIN de equipo" maxlength="6" inputmode="numeric">
+      <input type="password" id="pinInput" placeholder="Introduce tu PIN" maxlength="6" inputmode="numeric">
       
-      <button id="loginBtn" onclick="handleLogin()">Entrar al Radar</button>
+      <button onclick="handleLogin()">Activar Radar (30s)</button>
       <div id="loginError" class="error-msg"></div>
     </div>
   </div>
 
-  <!-- Dashboard Principal -->
+  <!-- Vista del Mapa Activo -->
   <div id="header">
     <div class="session-info">
       <span id="activeTeamBadge" class="badge">Objetivo: --</span>
       <button class="logout-btn" onclick="handleLogout('Manual')">🔒 Salir</button>
     </div>
-    <div class="timer" id="timerDisplay">Calculando radar...</div>
+    <div class="timer" id="timerDisplay">RADAR ACTIVO: 30s</div>
   </div>
   <div id="map"></div>
 
@@ -184,7 +197,7 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // Coordenadas de Avellanosa de Muñó
+    // Avellanosa de Muñó
     const VILLAGE_LAT = 41.983498;
     const VILLAGE_LNG = -3.824581;
 
@@ -194,58 +207,77 @@
       attribution: '© OpenStreetMap'
     }).addTo(map);
 
-    let currentTargetTeam = null;
+    let currentSessionTeam = null;  // 'A' o 'B'
+    let currentTargetTeam = null;   // 'B' o 'A'
     let allPlayers = {};
     let activeLayers = [];
+    let cooldowns = { A: 0, B: 0 };
 
-    const CYCLE_MS = 10 * 60 * 1000; // 10 minutos
-    const REVEAL_MS = 30 * 1000;      // 30 segundos
+    const COOLDOWN_MS = 10 * 60 * 1000; // 10 minutos
+    const REVEAL_MS = 30 * 1000;         // 30 segundos
 
-    // Comprobar si la ventana de radar está abierta ahora mismo
-    function isRadarWindowActive() {
-      const timeInCycle = Date.now() % CYCLE_MS;
-      return timeInCycle < REVEAL_MS;
-    }
+    // Sincronizar cooldowns independientes desde Firebase
+    db.ref('cooldowns').on('value', (snapshot) => {
+      cooldowns = snapshot.val() || { A: 0, B: 0 };
+    });
+
+    // Sincronizar coordenadas de los jugadores
+    db.ref('players').on('value', (snapshot) => {
+      allPlayers = snapshot.val() || {};
+      if (currentTargetTeam) {
+        drawMarkers();
+      }
+    });
 
     function handleLogin() {
       const selected = document.getElementById('userTeamSelect').value;
       const pin = document.getElementById('pinInput').value.trim();
       const errEl = document.getElementById('loginError');
+      const now = Date.now();
 
-      // Validar primero si la ventana de 30s está disponible
-      if (!isRadarWindowActive()) {
-        const timeInCycle = Date.now() % CYCLE_MS;
-        const untilNext = Math.ceil((CYCLE_MS - timeInCycle) / 1000);
-        const mins = Math.floor(untilNext / 60);
-        const secs = String(untilNext % 60).padStart(2, '0');
-        errEl.innerText = `⏳ Radar bloqueado. La siguiente ventana de 30s abre en ${mins}:${secs}`;
+      // Comprobar contraseña
+      if (selected === 'A' && pin !== '1111') {
+        errEl.innerText = '❌ PIN incorrecto para el Equipo A (1111)';
+        errEl.style.display = 'block';
+        return;
+      }
+      if (selected === 'B' && pin !== '9999') {
+        errEl.innerText = '❌ PIN incorrecto para el Equipo B (9999)';
         errEl.style.display = 'block';
         return;
       }
 
-      // Validar contraseña
-      if (selected === 'A' && pin === '1111') {
-        currentTargetTeam = 'B';
-        loginSuccess('Equipo A (Rastreando: B)');
-      } else if (selected === 'B' && pin === '9999') {
-        currentTargetTeam = 'A';
-        loginSuccess('Equipo B (Rastreando: A)');
-      } else {
-        errEl.innerText = '❌ PIN incorrecto para este equipo';
-        errEl.style.display = 'block';
-      }
-    }
+      // Comprobar cooldown independiente del equipo
+      const lastUsed = cooldowns[selected] || 0;
+      const timePassed = now - lastUsed;
 
-    function loginSuccess(badgeText) {
+      if (timePassed < COOLDOWN_MS) {
+        // Aún en cooldown
+        const remaining = Math.ceil((COOLDOWN_MS - timePassed) / 1000);
+        const mins = Math.floor(remaining / 60);
+        const secs = String(remaining % 60).padStart(2, '0');
+        errEl.innerText = `⏳ Tu equipo ya usó el radar. Disponible en ${mins}:${secs}`;
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // Activar radar: guardar timestamp en Firebase para arrancar sus 10 min
+      db.ref(`cooldowns/${selected}`).set(now);
+
+      currentSessionTeam = selected;
+      currentTargetTeam = selected === 'A' ? 'B' : 'A';
+
       document.getElementById('loginError').style.display = 'none';
       document.getElementById('pinInput').value = '';
       document.getElementById('authOverlay').style.display = 'none';
-      document.getElementById('activeTeamBadge').innerText = badgeText;
+      document.getElementById('activeTeamBadge').innerText = `Equipo ${selected} (Espiando a: ${currentTargetTeam})`;
+      
       map.invalidateSize();
       drawMarkers();
     }
 
     function handleLogout(reason) {
+      currentSessionTeam = null;
       currentTargetTeam = null;
       clearMarkers();
       document.getElementById('authOverlay').style.display = 'flex';
@@ -253,18 +285,10 @@
       
       const errEl = document.getElementById('loginError');
       if (reason === 'TimeUp') {
-        errEl.innerText = '⌛ Se agotaron los 30 segundos. Radar bloqueado hasta el próximo ciclo.';
+        errEl.innerText = '⌛ Se agotaron los 30 segundos. Tu radar entra en espera de 10 minutos.';
         errEl.style.display = 'block';
       }
     }
-
-    // Escuchar cambios de ubicación en Firebase
-    db.ref('players').on('value', (snapshot) => {
-      allPlayers = snapshot.val() || {};
-      if (currentTargetTeam && isRadarWindowActive()) {
-        drawMarkers();
-      }
-    });
 
     function clearMarkers() {
       activeLayers.forEach(layer => map.removeLayer(layer));
@@ -298,8 +322,8 @@
           }).bindPopup(`
             <div style="color: #111;">
               <b>${p.name}</b><br>
-              Margen de error: ±${Math.round(p.accuracy)}m<br>
-              Hora: ${new Date(p.updatedAt).toLocaleTimeString()}
+              Precisión: ±${Math.round(p.accuracy)}m<br>
+              Último ping: ${new Date(p.updatedAt).toLocaleTimeString()}
             </div>
           `).addTo(map);
 
@@ -308,44 +332,43 @@
       });
     }
 
-    // Bucle del reloj principal
-    function updateRadarLoop() {
+    // Actualizador de cooldowns y expulsión a los 30s
+    function updateTimers() {
       const now = Date.now();
-      const timeInCycle = now % CYCLE_MS;
-      const timerEl = document.getElementById('timerDisplay');
-      const modalTimerEl = document.getElementById('modalTimerDisplay');
 
-      if (timeInCycle < REVEAL_MS) {
-        // VENTANA ACTIVA (30 segundos)
-        const remaining = Math.ceil((REVEAL_MS - timeInCycle) / 1000);
-        
-        timerEl.innerText = `🚨 RADAR ACTIVO: ${remaining}s`;
-        timerEl.className = 'timer ping-active';
-        
-        modalTimerEl.innerHTML = `<span style="color: #ef4444;">🚨 VENTANA ACTIVA: ${remaining}s restantes</span>`;
+      // 1. Actualizar estado visual de los dos equipos en el menú de inicio
+      ['A', 'B'].forEach(team => {
+        const lastUsed = cooldowns[team] || 0;
+        const timePassed = now - lastUsed;
+        const textEl = document.getElementById(`statusText${team}`);
 
-        if (currentTargetTeam && activeLayers.length === 0) {
-          drawMarkers();
+        if (timePassed < COOLDOWN_MS) {
+          const remaining = Math.ceil((COOLDOWN_MS - timePassed) / 1000);
+          const mins = Math.floor(remaining / 60);
+          const secs = String(remaining % 60).padStart(2, '0');
+          textEl.innerText = `Espera: ${mins}:${secs}`;
+          textEl.className = 'waiting';
+        } else {
+          textEl.innerText = `🟢 Disponible`;
+          textEl.className = 'ready';
         }
-      } else {
-        // VENTANA CERRADA (Espera de ~9:30 min)
-        const untilNext = Math.ceil((CYCLE_MS - timeInCycle) / 1000);
-        const mins = Math.floor(untilNext / 60);
-        const secs = String(untilNext % 60).padStart(2, '0');
+      });
 
-        timerEl.innerText = `Próximo radar en: ${mins}:${secs}`;
-        timerEl.className = 'timer';
+      // 2. Si hay una sesión activa, controlar los 30 segundos
+      if (currentSessionTeam) {
+        const sessionStart = cooldowns[currentSessionTeam] || 0;
+        const elapsed = now - sessionStart;
 
-        modalTimerEl.innerHTML = `🔒 Siguiente escaneo en: <span style="color: #38bdf8;">${mins}:${secs}</span>`;
-
-        // Si estaba logueado y se acabaron los 30s, lo expulsa de inmediato
-        if (currentTargetTeam) {
+        if (elapsed < REVEAL_MS) {
+          const remainingSecs = Math.ceil((REVEAL_MS - elapsed) / 1000);
+          document.getElementById('timerDisplay').innerText = `🚨 RADAR ACTIVO: ${remainingSecs}s`;
+        } else {
           handleLogout('TimeUp');
         }
       }
     }
 
-    setInterval(updateRadarLoop, 1000);
+    setInterval(updateTimers, 1000);
   </script>
 </body>
 </html>
