@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Escondite Tracker</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #0f172a;
@@ -14,7 +15,6 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      box-sizing: border-box;
       min-height: 100vh;
     }
     .card {
@@ -36,7 +36,6 @@
       background: #0f172a;
       color: #fff;
       font-size: 16px;
-      box-sizing: border-box;
     }
     button {
       background: #10b981;
@@ -54,12 +53,78 @@
       line-height: 1.6;
       white-space: pre-line;
     }
+
+    /* Pantalla de Fin de Partida / Alarma */
+    #gameOverOverlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #7f1d1d;
+      color: white;
+      display: none;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 30px;
+      z-index: 99999;
+      animation: alertPulse 1.2s infinite alternate;
+    }
+
+    @keyframes alertPulse {
+      from { background: #7f1d1d; }
+      to { background: #991b1b; }
+    }
+
+    .alert-icon { font-size: 64px; margin-bottom: 10px; animation: bounce 0.6s infinite alternate; }
+    @keyframes bounce { from { transform: scale(1); } to { transform: scale(1.15); } }
+
+    .winner-banner {
+      font-size: 26px;
+      font-weight: 900;
+      color: #fef08a;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+
+    .base-order {
+      font-size: 32px;
+      font-weight: bold;
+      color: #ffffff;
+      margin-bottom: 24px;
+      letter-spacing: 1px;
+    }
+
+    .silence-btn {
+      background: #ffffff;
+      color: #991b1b;
+      font-weight: bold;
+      font-size: 18px;
+      padding: 16px 32px;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+    }
   </style>
 
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 </head>
 <body>
+
+  <!-- Overlay de Fin de Partida -->
+  <div id="gameOverOverlay">
+    <div class="alert-icon">🚨</div>
+    <div style="font-size: 20px; font-weight: bold; margin-bottom: 8px;">PARTIDA TERMINADA</div>
+    <div class="winner-banner" id="winnerAnnouncement">¡GANADOR: EQUIPO A!</div>
+    <div class="base-order">📍 ¡VOLVED A LA BASE!</div>
+    <button class="silence-btn" onclick="silenceAlarm()">🔕 Silenciar Alarma</button>
+  </div>
+
   <div class="card">
     <h2>📡 Escondite Tracker</h2>
     <input id="playerName" placeholder="Tu Nombre">
@@ -89,8 +154,84 @@
     let pingInterval = null;
     let latestCoords = null;
     let myPlayerRef = null;
+    let audioCtx = null;
+    let sirenInterval = null;
+
+    // Inicializar AudioContext en el primer toque de pantalla para evitar bloqueo del navegador
+    function initAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    // Generador de sonido de sirena con Web Audio API
+    function playSirenBeep() {
+      try {
+        initAudio();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.35);
+
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.35);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.35);
+
+        if ('vibrate' in navigator) {
+          navigator.vibrate([200, 100, 200]);
+        }
+      } catch (e) {
+        console.warn('Audio error:', e);
+      }
+    }
+
+    function triggerAlarm(winner) {
+      document.getElementById('winnerAnnouncement').innerText = `🏆 ¡GANADOR: ${winner.toUpperCase()}!`;
+      document.getElementById('gameOverOverlay').style.display = 'flex';
+
+      // Parar transmisión GPS
+      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      if (pingInterval !== null) clearInterval(pingInterval);
+
+      // Reproducir sirena continua cada 500ms
+      playSirenBeep();
+      if (!sirenInterval) {
+        sirenInterval = setInterval(playSirenBeep, 500);
+      }
+    }
+
+    function silenceAlarm() {
+      if (sirenInterval) {
+        clearInterval(sirenInterval);
+        sirenInterval = null;
+      }
+      document.getElementById('gameOverOverlay').style.display = 'none';
+      stopTracking('Partida finalizada por el Administrador.');
+    }
+
+    // Escuchar estado de la partida
+    db.ref('gameState').on('value', (snapshot) => {
+      const state = snapshot.val();
+      if (state && state.status === 'ENDED') {
+        triggerAlarm(state.winner || 'PARTIDA CONCLUIDA');
+      } else if (state && state.status === 'ACTIVE') {
+        if (sirenInterval) clearInterval(sirenInterval);
+        document.getElementById('gameOverOverlay').style.display = 'none';
+      }
+    });
 
     async function startTracking() {
+      initAudio();
       const name = document.getElementById('playerName').value.trim();
       const team = document.getElementById('team').value;
       if (!name) return alert('Por favor, introduce tu nombre');
@@ -107,15 +248,14 @@
       const safeKey = name.replace(/[.#$[\]]/g, "_");
       myPlayerRef = db.ref(`players/${safeKey}`);
 
-      // Escuchar si el Admin resetea/borra la partida
+      // Escuchar si el admin borra los jugadores
       myPlayerRef.on('value', (snapshot) => {
-        // Si estábamos transmitiendo pero el admin borró el nodo
         if (latestCoords && !snapshot.exists()) {
           stopTracking('Partida reiniciada por el Administrador.');
         }
       });
 
-      // 1. Obtener última posición en tiempo real
+      // 1. Obtener última posición
       watchId = navigator.geolocation.watchPosition(
         (pos) => {
           latestCoords = {
@@ -130,7 +270,7 @@
         { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
       );
 
-      // 2. Enviar ping a Firebase estrictamente cada 10 segundos
+      // 2. Transmisión estricta cada 10 segundos
       pingInterval = setInterval(() => {
         if (latestCoords && myPlayerRef) {
           const payload = {
