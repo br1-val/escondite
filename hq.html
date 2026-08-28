@@ -2,6 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>HQ Radar - Avellanosa de Muñó</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -10,6 +11,7 @@
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 
   <style>
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       display: flex;
@@ -17,10 +19,83 @@
       height: 100vh;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #0f172a;
+      color: #f8fafc;
     }
+
+    /* Modal de Bloqueo / Login */
+    #authOverlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(15, 23, 42, 0.96);
+      backdrop-filter: blur(10px);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 9999;
+    }
+
+    .auth-card {
+      background: #1e293b;
+      padding: 32px;
+      border-radius: 16px;
+      border: 1px solid #334155;
+      width: 90%;
+      max-width: 420px;
+      text-align: center;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+
+    .auth-card h2 { margin-top: 0; color: #38bdf8; }
+    .auth-card select, .auth-card input {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 16px;
+      border-radius: 8px;
+      border: 1px solid #475569;
+      background: #0f172a;
+      color: white;
+      font-size: 16px;
+    }
+
+    .auth-card button {
+      width: 100%;
+      padding: 12px;
+      border-radius: 8px;
+      border: none;
+      background: #3b82f6;
+      color: white;
+      font-weight: bold;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .auth-card button:hover { background: #2563eb; }
+
+    .modal-timer {
+      background: #0f172a;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      margin-bottom: 20px;
+      font-weight: bold;
+      font-size: 15px;
+      color: #94a3b8;
+    }
+
+    .error-msg {
+      color: #ef4444;
+      font-size: 14px;
+      margin-top: 12px;
+      line-height: 1.4;
+      display: none;
+    }
+
+    /* Header del Radar */
     #header {
       background: #1e293b;
-      color: white;
       padding: 12px 24px;
       display: flex;
       justify-content: space-between;
@@ -28,28 +103,68 @@
       border-bottom: 2px solid #334155;
       z-index: 1000;
     }
-    #map { flex: 1; }
-    .timer { font-size: 22px; font-weight: bold; color: #38bdf8; }
-    .ping-active { color: #ef4444 !important; animation: blink 1s infinite; }
-    select {
-      background: #0f172a;
-      color: #fff;
-      border: 1px solid #475569;
-      padding: 8px 14px;
-      font-size: 15px;
-      border-radius: 6px;
+
+    .session-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
     }
+
+    .badge {
+      background: #0f172a;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-weight: bold;
+      border: 1px solid #475569;
+    }
+
+    .logout-btn {
+      background: #ef4444;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    #map { flex: 1; }
+    .timer { font-size: 20px; font-weight: bold; color: #38bdf8; }
+    .ping-active { color: #ef4444 !important; animation: blink 1s infinite; }
     @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   </style>
 </head>
 <body>
-  <div id="header">
-    <div>
-      <label style="font-weight: bold; margin-right: 8px;">Equipo a espiar: </label>
-      <select id="targetTeam" onchange="drawMarkers()">
-        <option value="A">Equipo A (Se esconden)</option>
-        <option value="B">Equipo B (Buscan)</option>
+
+  <!-- Modal de Login / Bloqueo -->
+  <div id="authOverlay">
+    <div class="auth-card">
+      <h2>🛡️ HQ Radar Central</h2>
+      
+      <div id="modalTimerDisplay" class="modal-timer">Sincronizando reloj...</div>
+
+      <p style="color: #94a3b8; font-size: 14px; margin-bottom: 16px;">
+        Introduce tus credenciales para ver las posiciones enemigas durante la ventana de 30 segundos.
+      </p>
+      
+      <select id="userTeamSelect">
+        <option value="A">Capitán Equipo A (Ver al B)</option>
+        <option value="B">Capitán Equipo B (Ver al A)</option>
       </select>
+
+      <input type="password" id="pinInput" placeholder="Introduce PIN de equipo" maxlength="6" inputmode="numeric">
+      
+      <button id="loginBtn" onclick="handleLogin()">Entrar al Radar</button>
+      <div id="loginError" class="error-msg"></div>
+    </div>
+  </div>
+
+  <!-- Dashboard Principal -->
+  <div id="header">
+    <div class="session-info">
+      <span id="activeTeamBadge" class="badge">Objetivo: --</span>
+      <button class="logout-btn" onclick="handleLogout('Manual')">🔒 Salir</button>
     </div>
     <div class="timer" id="timerDisplay">Calculando radar...</div>
   </div>
@@ -69,22 +184,84 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.database();
 
-    // Centered directly on Avellanosa de Muñó
-    const map = L.map('map').setView([42.0073, -3.9248], 16);
+    // Coordenadas de Avellanosa de Muñó
+    const VILLAGE_LAT = 41.983498;
+    const VILLAGE_LNG = -3.824581;
+
+    const map = L.map('map').setView([VILLAGE_LAT, VILLAGE_LNG], 16);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '© OpenStreetMap'
     }).addTo(map);
 
+    let currentTargetTeam = null;
     let allPlayers = {};
     let activeLayers = [];
-    const CYCLE_MS = 10 * 60 * 1000; // 10 minutes
-    const REVEAL_MS = 30 * 1000;      // 30 seconds
 
+    const CYCLE_MS = 10 * 60 * 1000; // 10 minutos
+    const REVEAL_MS = 30 * 1000;      // 30 segundos
+
+    // Comprobar si la ventana de radar está abierta ahora mismo
+    function isRadarWindowActive() {
+      const timeInCycle = Date.now() % CYCLE_MS;
+      return timeInCycle < REVEAL_MS;
+    }
+
+    function handleLogin() {
+      const selected = document.getElementById('userTeamSelect').value;
+      const pin = document.getElementById('pinInput').value.trim();
+      const errEl = document.getElementById('loginError');
+
+      // Validar primero si la ventana de 30s está disponible
+      if (!isRadarWindowActive()) {
+        const timeInCycle = Date.now() % CYCLE_MS;
+        const untilNext = Math.ceil((CYCLE_MS - timeInCycle) / 1000);
+        const mins = Math.floor(untilNext / 60);
+        const secs = String(untilNext % 60).padStart(2, '0');
+        errEl.innerText = `⏳ Radar bloqueado. La siguiente ventana de 30s abre en ${mins}:${secs}`;
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // Validar contraseña
+      if (selected === 'A' && pin === '1111') {
+        currentTargetTeam = 'B';
+        loginSuccess('Equipo A (Rastreando: B)');
+      } else if (selected === 'B' && pin === '9999') {
+        currentTargetTeam = 'A';
+        loginSuccess('Equipo B (Rastreando: A)');
+      } else {
+        errEl.innerText = '❌ PIN incorrecto para este equipo';
+        errEl.style.display = 'block';
+      }
+    }
+
+    function loginSuccess(badgeText) {
+      document.getElementById('loginError').style.display = 'none';
+      document.getElementById('pinInput').value = '';
+      document.getElementById('authOverlay').style.display = 'none';
+      document.getElementById('activeTeamBadge').innerText = badgeText;
+      map.invalidateSize();
+      drawMarkers();
+    }
+
+    function handleLogout(reason) {
+      currentTargetTeam = null;
+      clearMarkers();
+      document.getElementById('authOverlay').style.display = 'flex';
+      document.getElementById('activeTeamBadge').innerText = 'Objetivo: --';
+      
+      const errEl = document.getElementById('loginError');
+      if (reason === 'TimeUp') {
+        errEl.innerText = '⌛ Se agotaron los 30 segundos. Radar bloqueado hasta el próximo ciclo.';
+        errEl.style.display = 'block';
+      }
+    }
+
+    // Escuchar cambios de ubicación en Firebase
     db.ref('players').on('value', (snapshot) => {
       allPlayers = snapshot.val() || {};
-      const timeInCycle = Date.now() % CYCLE_MS;
-      if (timeInCycle < REVEAL_MS) {
+      if (currentTargetTeam && isRadarWindowActive()) {
         drawMarkers();
       }
     });
@@ -96,15 +273,14 @@
 
     function drawMarkers() {
       clearMarkers();
-      const targetTeam = document.getElementById('targetTeam').value;
+      if (!currentTargetTeam) return;
+
       const now = Date.now();
 
       Object.values(allPlayers).forEach(p => {
-        // Render players updated in the last 15 minutes
-        if (p.team === targetTeam && (now - p.updatedAt) < 15 * 60 * 1000) {
-          const color = targetTeam === 'A' ? '#3b82f6' : '#f97316';
+        if (p.team === currentTargetTeam && (now - p.updatedAt) < 15 * 60 * 1000) {
+          const color = currentTargetTeam === 'A' ? '#3b82f6' : '#f97316';
 
-          // Accuracy radius circle
           const radiusCircle = L.circle([p.lat, p.lng], {
             radius: p.accuracy || 15,
             color: color,
@@ -113,37 +289,59 @@
             fillOpacity: 0.15
           }).addTo(map);
 
-          // Marker center point
           const marker = L.circleMarker([p.lat, p.lng], {
             radius: 8,
             fillColor: color,
             color: '#ffffff',
             weight: 2,
             fillOpacity: 0.95
-          }).bindPopup(`<b>${p.name}</b><br>Margen error: ±${Math.round(p.accuracy)}m<br>Hora: ${new Date(p.updatedAt).toLocaleTimeString()}`).addTo(map);
+          }).bindPopup(`
+            <div style="color: #111;">
+              <b>${p.name}</b><br>
+              Margen de error: ±${Math.round(p.accuracy)}m<br>
+              Hora: ${new Date(p.updatedAt).toLocaleTimeString()}
+            </div>
+          `).addTo(map);
 
           activeLayers.push(radiusCircle, marker);
         }
       });
     }
 
+    // Bucle del reloj principal
     function updateRadarLoop() {
       const now = Date.now();
       const timeInCycle = now % CYCLE_MS;
       const timerEl = document.getElementById('timerDisplay');
+      const modalTimerEl = document.getElementById('modalTimerDisplay');
 
       if (timeInCycle < REVEAL_MS) {
+        // VENTANA ACTIVA (30 segundos)
         const remaining = Math.ceil((REVEAL_MS - timeInCycle) / 1000);
+        
         timerEl.innerText = `🚨 RADAR ACTIVO: ${remaining}s`;
         timerEl.className = 'timer ping-active';
-        if (activeLayers.length === 0) drawMarkers();
+        
+        modalTimerEl.innerHTML = `<span style="color: #ef4444;">🚨 VENTANA ACTIVA: ${remaining}s restantes</span>`;
+
+        if (currentTargetTeam && activeLayers.length === 0) {
+          drawMarkers();
+        }
       } else {
-        clearMarkers();
+        // VENTANA CERRADA (Espera de ~9:30 min)
         const untilNext = Math.ceil((CYCLE_MS - timeInCycle) / 1000);
         const mins = Math.floor(untilNext / 60);
         const secs = String(untilNext % 60).padStart(2, '0');
+
         timerEl.innerText = `Próximo radar en: ${mins}:${secs}`;
         timerEl.className = 'timer';
+
+        modalTimerEl.innerHTML = `🔒 Siguiente escaneo en: <span style="color: #38bdf8;">${mins}:${secs}</span>`;
+
+        // Si estaba logueado y se acabaron los 30s, lo expulsa de inmediato
+        if (currentTargetTeam) {
+          handleLogout('TimeUp');
+        }
       }
     }
 
